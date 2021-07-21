@@ -8,7 +8,7 @@ FILE="main.cpp -o wsc"
 #DIR="-L/usr/local/ssl/lib -I/usr/local/ssl/lib/include"
 DIR="-Llib -Iinclude"
 JEM="-ljemalloc -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free"
-LIB="-lpthread -lboost_thread -lfmt -lssl -lcrypto -lboost_chrono -lz"  #-lrt
+LIB="-lpthread -lboost_thread -lfmt -lssl -lcrypto -lboost_chrono -lz -ldl -static"  #-lrt
 #LIB="-static -lboost_thread"
 OPT="$FILE $STA $DIR $LIB $JEM -DSPDLOG_FMT_EXTERNAL=1 "
 CXX="clang++"
