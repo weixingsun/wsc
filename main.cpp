@@ -191,7 +191,7 @@ void print() {
 void threads_boost() {
     for (int i = 0; i < N; i++) {
         tg.create_thread(loop);
-        boost::this_thread::sleep_for(boost::chrono::milliseconds(10));
+        boost::this_thread::sleep_for(boost::chrono::milliseconds(1));
     }
     tg.create_thread(print);
     tg.join_all();
