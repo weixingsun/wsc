@@ -2,29 +2,23 @@
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/extensions/permessage_deflate/enabled.hpp>
 #include <websocketpp/client.hpp>
-#include "cxxopts.hpp"
+#include <prometheus/counter.h>
+#include <prometheus/exposer.h>
+#include <prometheus/registry.h>
 #include <spdlog/spdlog.h>
+#include <cxxopts.hpp>
 //#include <sys/sdt.h>
 //#include <thread>
 #include <iostream>
 #include <string>
 #include <boost/chrono.hpp>
 #include <boost/thread.hpp>
-
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 using websocketpp::lib::bind;
-
-bool DEBUG=false;
-bool ZIP=true;
-bool REC=true;
-std::string URL="";
-//int DURATION=10;
-int INTERVAL=1;
-int CNT = 0;
-int N = 1;
-int R_CNT = 0;
-boost::thread_group tg;
 
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
 typedef std::shared_ptr<boost::asio::ssl::context> context_ptr;
@@ -59,6 +53,52 @@ struct deflate_config : public websocketpp::config::asio_client {
     typedef websocketpp::extensions::permessage_deflate::enabled <permessage_deflate_config> permessage_deflate_type;
 };
 
+bool DEBUG=false;
+bool ZIP=true;
+bool REC=true;
+std::string URL="";
+std::string PORT="";
+int INTERVAL=1;
+int CNT = 0;
+int N = 1;
+int R_CNT = 0;
+boost::thread_group tg;
+std::string IP="";
+prometheus::Gauge* rate;
+prometheus::Gauge* reconn;
+prometheus::Gauge* lat99;
+prometheus::Gauge* lat100;
+
+std::string convertToString(char* a){
+    std::string s = a;
+    return s;
+}
+void get_ip() {
+    struct ifaddrs * ifAddrStruct=NULL;
+    struct ifaddrs * ifa=NULL;
+    void * tmpAddrPtr=NULL;
+
+    getifaddrs(&ifAddrStruct);
+    char addressBuffer[INET_ADDRSTRLEN];
+    for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) {
+            continue;
+        }
+        std::string eth(ifa->ifa_name);
+        if (eth.rfind("lo", 0)==0|| eth.rfind("vir", 0)==0){
+            continue;
+        }
+        if (ifa->ifa_addr->sa_family == AF_INET) { // IP4
+            // is a valid IP4 Address
+            tmpAddrPtr=&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+            inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
+            //printf("%s -> %s\n", ifa->ifa_name, addressBuffer);
+        }
+    }
+    if (ifAddrStruct!=NULL) freeifaddrs(ifAddrStruct);
+    IP=convertToString(addressBuffer);
+    std::cout<<"IP: "<<IP<<std::endl;
+}
 void on_message(websocketpp::connection_hdl hdl, message_ptr msg) {
     //spdlog::info("hdl: {} message: {}", hdl.lock().get(), msg->get_payload());
     CNT++;
@@ -176,14 +216,31 @@ bool loop(){
         R_CNT++;
     }
 }
-
+void prom_init(){
+    prometheus::Exposer exposer{"127.0.0.1:"+PORT};
+    auto registry = std::make_shared<prometheus::Registry>();
+    auto metric_name="WSC";
+    auto metric_help="WS Client Performance Metrics";
+    //auto& wsc_perf = BuildCounter().Name(metric_name).Help(metric_help).Register(*registry);
+    auto& wsc_perf = prometheus::BuildGauge().Name(metric_name).Help(metric_help).Register(*registry);
+    rate   = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "rate"}});
+    reconn = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "reconn"}});
+    lat99  = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "lat99"}});
+    lat100 = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "lat100"}});
+    exposer.RegisterCollectable(registry);
+}
+void prom_upload(){
+    rate->Set(CNT);
+    reconn->Set(R_CNT);
+    lat99->Set(0);
+    lat100->Set(0);
+}
 void print() {
-    //auto end = std::chrono::steady_clock::now()+std::chrono::seconds(DURATION);
-    while(true){ //std::chrono::steady_clock::now()<end
+    while(true){ //std::chrono::steady_clock::now()
         boost::this_thread::sleep_for(boost::chrono::seconds(INTERVAL));
         spdlog::info("Reconnect[{}] MSG Rate: {}/s", R_CNT,CNT);
         CNT=0;
-        //DURATION--;
+        prom_upload();
     }
 }
 
@@ -207,13 +264,17 @@ void append_url(std::string SYMBOLS, std::string STREAMS){
     std::stringstream sm(STREAMS);
     while(ss.good()) {
         std::string substr;
-        getline(ss, substr, ','); //get first string delimited by comma
-        symbolv.push_back(substr);
+        getline(ss, substr, ',');
+        if (substr.size()>0) symbolv.push_back(substr);
     }
     while(sm.good()) {
         std::string substr;
-        getline(sm, substr, ','); //get first string delimited by comma
-        streamv.push_back(substr);
+        getline(sm, substr, ',');
+        if (substr.size()>0) streamv.push_back(substr);
+    }
+    if (DEBUG){
+        std::cout<<"SYMBOLS="<<SYMBOLS<<"STREAMS="<<STREAMS<<std::endl;
+        std::cout<<"symbolv="<<symbolv.size()<<"streamv="<<streamv.size()<<std::endl;
     }
     for(int i = 0; i<streamv.size(); i++) {
         auto stream = streamv.at(i);
@@ -236,9 +297,10 @@ int main(int argc, char** argv) {
         ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value(""))  //btcusdt,ethusdt
         ("m,streams", "Streams",            cxxopts::value<std::string>()->default_value(""))  //bookTicker
         ("t,threads", "Threads",            cxxopts::value<int>()->default_value("1"))
-        //("n,duration","Duration",           cxxopts::value<int>()->default_value("60"))
+        //("n,duration","Duration",         cxxopts::value<int>()->default_value("60"))
         ("i,interval","Interval",           cxxopts::value<int>()->default_value("1"))
         ("f,freq",    "Sampling Frequency", cxxopts::value<int>()->default_value("1000")) //sampling every N msg
+        ("p,promport","Prometheus Port",    cxxopts::value<std::string>()->default_value("8080"))
         ("h,help",    "Print usage")
     ;
     auto result = options.parse(argc, argv);
@@ -251,10 +313,12 @@ int main(int argc, char** argv) {
     INTERVAL=result["interval"].as<int>();
     N=result["threads"].as<int>();
     REC=result["reconn"].as<bool>();
+    PORT=result["promport"].as<std::string>();
+    std::cout<<"Prometheus Port: "<<PORT<<std::endl;
     //DURATION=result["duration"].as<int>();
     append_url(result["symbols"].as<std::string>(),result["streams"].as<std::string>());
-
+    get_ip();
+    prom_init();
     threads_boost();
     return 0;
 }
-
