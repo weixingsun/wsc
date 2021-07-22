@@ -19,8 +19,7 @@ bool DEBUG=false;
 bool ZIP=true;
 bool REC=true;
 std::string URL="";
-std::string SYMBOL="";
-int DURATION=10;
+//int DURATION=10;
 int INTERVAL=1;
 int CNT = 0;
 int N = 1;
@@ -184,7 +183,7 @@ void print() {
         boost::this_thread::sleep_for(boost::chrono::seconds(INTERVAL));
         spdlog::info("Reconnect[{}] MSG Rate: {}/s", R_CNT,CNT);
         CNT=0;
-        DURATION--;
+        //DURATION--;
     }
 }
 
@@ -199,8 +198,33 @@ void threads_boost() {
 
 //"wss://stream.binance.com:9443/ws/btcusdt@bookTicker";
 //"wss://stream.binance.com:9443/ws/!bookTicker";
-//"ws://172.20.150.6:9080/ws/!bookTicker";
+//"ws://172.20.150.230:9080/ws/!bookTicker";
 //"ws://172.20.150.230:9080/ws/btc001@bookTicker/btc002@bookTicker/btc003@bookTicker/btc004@bookTicker/btc005@bookTicker"
+void append_url(std::string SYMBOLS, std::string STREAMS){
+    std::vector<std::string> symbolv;
+    std::vector<std::string> streamv;
+    std::stringstream ss(SYMBOLS);
+    std::stringstream sm(STREAMS);
+    while(ss.good()) {
+        std::string substr;
+        getline(ss, substr, ','); //get first string delimited by comma
+        symbolv.push_back(substr);
+    }
+    while(sm.good()) {
+        std::string substr;
+        getline(sm, substr, ','); //get first string delimited by comma
+        streamv.push_back(substr);
+    }
+    for(int i = 0; i<streamv.size(); i++) {
+        auto stream = streamv.at(i);
+        for(int i = 0; i<symbolv.size(); i++) {
+            auto sym = symbolv.at(i);
+            auto part = "/"+sym+"@"+stream;
+            URL+=part;
+        }
+    }
+    std::cout<<URL<<std::endl;
+}
 int main(int argc, char** argv) {
     cxxopts::Options options("wsclient", "websocket client for binance stream");
     options.add_options()
@@ -209,9 +233,10 @@ int main(int argc, char** argv) {
         ("z,zlib",    "Permessage Deflate", cxxopts::value<bool>()->default_value("true"))
         ("r,reconn",  "Reconnect on error", cxxopts::value<bool>()->default_value("true"))
         ("u,url",     "URL",                cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443/ws/!bookTicker"))
-        ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value("BTCUSDT"))
+        ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value(""))  //btcusdt,ethusdt
+        ("m,streams", "Streams",            cxxopts::value<std::string>()->default_value(""))  //bookTicker
         ("t,threads", "Threads",            cxxopts::value<int>()->default_value("1"))
-        ("n,duration","Duration",           cxxopts::value<int>()->default_value("60"))
+        //("n,duration","Duration",           cxxopts::value<int>()->default_value("60"))
         ("i,interval","Interval",           cxxopts::value<int>()->default_value("1"))
         ("f,freq",    "Sampling Frequency", cxxopts::value<int>()->default_value("1000")) //sampling every N msg
         ("h,help",    "Print usage")
@@ -223,11 +248,11 @@ int main(int argc, char** argv) {
     }
     DEBUG = result["debug"].as<bool>();
     URL=result["url"].as<std::string>();
-    SYMBOL=result["symbols"].as<std::string>();
-    DURATION=result["duration"].as<int>();
     INTERVAL=result["interval"].as<int>();
     N=result["threads"].as<int>();
     REC=result["reconn"].as<bool>();
+    //DURATION=result["duration"].as<int>();
+    append_url(result["symbols"].as<std::string>(),result["streams"].as<std::string>());
 
     threads_boost();
     return 0;
