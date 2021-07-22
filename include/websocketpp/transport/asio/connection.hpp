@@ -820,11 +820,12 @@ protected:
     void async_read_at_least(size_t num_bytes, char *buf, size_t len,
         read_handler handler)
     {
-        //if (m_alog->static_test(log::alevel::devel)) {
-        //    std::stringstream s;
-        //    s << "asio async_read_at_least: " << num_bytes;
-        //    m_alog->write(log::alevel::devel,s.str());
-        //}
+        ////////////////////////////////////////////////////////////////////////////  wsc fix 3
+        if (m_alog->static_test(log::alevel::devel)) {
+            std::stringstream s;
+            s << "asio async_read_at_least: " << num_bytes;
+            m_alog->write(log::alevel::devel,s.str());
+        }
 
         // TODO: safety vs speed ?
         // maybe move into an if devel block
@@ -889,6 +890,7 @@ protected:
                 // These are aggregate/catch all errors. Log some human readable
                 // information to the info channel to give library users some
                 // more details about why the upstream method may have failed.
+                ////////////////////////////////////////////////////////////////////////////  wsc fix 4
                 //log_err(log::elevel::info,"asio async_read_at_least",ec);
             }
         }

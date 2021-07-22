@@ -17,11 +17,14 @@ using websocketpp::lib::bind;
 
 bool DEBUG=false;
 bool ZIP=true;
+bool REC=true;
 std::string URL="";
 std::string SYMBOL="";
 int DURATION=10;
 int INTERVAL=1;
 int CNT = 0;
+int N = 1;
+int R_CNT = 0;
 boost::thread_group tg;
 
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
@@ -85,7 +88,28 @@ static context_ptr on_tls_init() {
     }
     return ctx;
 }
-
+void books(){
+    websocketpp::client<websocketpp::config::asio_tls_client> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none);
+        c.init_asio();
+        c.set_tls_init_handler(bind(&on_tls_init));
+        c.set_open_handler(bind(&on_open_tls, &c, ::_1));
+        c.set_message_handler(bind(&on_message, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<websocketpp::config::asio_tls_client>::connection_ptr conn = c.get_connection(URL, ec);
+        if (ec) {
+            spdlog::error("could not create connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        std::cout << e.what() << std::endl;
+        spdlog::error("Books error: {}", e.what());
+    }
+}
 void book(){
     websocketpp::client<websocketpp::config::asio_client> c;
     try {
@@ -122,33 +146,15 @@ void bookz(){
             return;
         }
         c.connect(conn);
+        // for (int i = 0; i < N; i++) {
+        //     websocketpp::lib::thread t1(websocketpp::client<deflate_config>::run, &c);
+        //     t1.join()
+        //     boost::this_thread::sleep_for(boost::chrono::milliseconds(10));
+        // }
         c.run();
     } catch (websocketpp::exception const &e) {
-        std::cout << e.what() << std::endl;
-        spdlog::error("Bookz error: {}", e.what());
-    }
-}
-void books(){
-    websocketpp::client<websocketpp::config::asio_tls_client> c;
-    try {
-        //c.set_access_channels(websocketpp::log::alevel::all);
-        c.set_access_channels(websocketpp::log::alevel::none);
-        c.clear_access_channels(websocketpp::log::alevel::none);
-        c.init_asio();
-        c.set_tls_init_handler(bind(&on_tls_init));
-        c.set_open_handler(bind(&on_open_tls, &c, ::_1));
-        c.set_message_handler(bind(&on_message, ::_1, ::_2));
-        websocketpp::lib::error_code ec;
-        websocketpp::client<websocketpp::config::asio_tls_client>::connection_ptr conn = c.get_connection(URL, ec);
-        if (ec) {
-            spdlog::error("could not create connection because: {}", ec.message());
-            return;
-        }
-        c.connect(conn);
-        c.run();
-    } catch (websocketpp::exception const &e) {
-        std::cout << e.what() << std::endl;
-        spdlog::error("Books error: {}", e.what());
+        //std::cout << e.what() << std::endl;
+        //spdlog::error("Bookz error: {}", e.what());
     }
 }
 bool loop(){
@@ -161,28 +167,31 @@ bool loop(){
             }else{
                 book();
             }
-            return true;
+            if (REC==false){
+                return true;
+            }
         }catch ( ... ) {
-            std::cout << "reconnect (" <<DURATION<<")"<< std::endl;
             //if ( yes ) return false;
         }
+        //std::cout << "reconnect (" <<DURATION<<")"<< std::endl;
+        R_CNT++;
     }
 }
 
 void print() {
     //auto end = std::chrono::steady_clock::now()+std::chrono::seconds(DURATION);
     while(true){ //std::chrono::steady_clock::now()<end
-        boost::this_thread::sleep_for(boost::chrono::milliseconds(1000*INTERVAL));
-        spdlog::info("[{}] MSG Rate: {}/s", tg.size(),CNT);
+        boost::this_thread::sleep_for(boost::chrono::seconds(INTERVAL));
+        spdlog::info("Reconnect[{}] MSG Rate: {}/s", R_CNT,CNT);
         CNT=0;
         DURATION--;
     }
 }
 
-void threads_boost(int N) {
-    std::chrono::milliseconds interval(10);
+void threads_boost() {
     for (int i = 0; i < N; i++) {
         tg.create_thread(loop);
+        boost::this_thread::sleep_for(boost::chrono::milliseconds(10));
     }
     tg.create_thread(print);
     tg.join_all();
@@ -198,11 +207,13 @@ int main(int argc, char** argv) {
         ("d,debug",   "Enable debugging",   cxxopts::value<bool>()->default_value("false"))
         ("v,verbose", "Verbose output",     cxxopts::value<bool>()->default_value("false"))
         ("z,zlib",    "Permessage Deflate", cxxopts::value<bool>()->default_value("true"))
+        ("r,reconn",  "Reconnect on error", cxxopts::value<bool>()->default_value("true"))
         ("u,url",     "URL",                cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443/ws/!bookTicker"))
         ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value("BTCUSDT"))
         ("t,threads", "Threads",            cxxopts::value<int>()->default_value("1"))
-        ("r,duration","Duration",           cxxopts::value<int>()->default_value("60"))
+        ("n,duration","Duration",           cxxopts::value<int>()->default_value("60"))
         ("i,interval","Interval",           cxxopts::value<int>()->default_value("1"))
+        ("f,freq",    "Sampling Frequency", cxxopts::value<int>()->default_value("1000")) //sampling every N msg
         ("h,help",    "Print usage")
     ;
     auto result = options.parse(argc, argv);
@@ -215,9 +226,10 @@ int main(int argc, char** argv) {
     SYMBOL=result["symbols"].as<std::string>();
     DURATION=result["duration"].as<int>();
     INTERVAL=result["interval"].as<int>();
-    int N=result["threads"].as<int>();
+    N=result["threads"].as<int>();
+    REC=result["reconn"].as<bool>();
 
-    threads_boost(N);
+    threads_boost();
     return 0;
 }
 

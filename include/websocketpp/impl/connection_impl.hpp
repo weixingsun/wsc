@@ -1007,8 +1007,7 @@ void connection<config>::handle_read_frame(lib::error_code const & ec,
             // already closed really an rerror?
         }
         
-        
-        
+        ////////////////////////////////////////////////////////////////////////////  wsc fix 1
         //log_err(echannel, "handle_read_frame", ecm);
         this->terminate(ecm);
         return;
@@ -1751,13 +1750,14 @@ template <typename config>
 void connection<config>::handle_terminate(terminate_status tstat,
     lib::error_code const & ec)
 {
-    if (m_alog->static_test(log::alevel::devel)) {
-        m_alog->write(log::alevel::devel,"connection handle_terminate");
+    //std::cout<<"handle_terminate"<<std::endl;
+    if (m_alog->static_test(log::alevel::disconnect)) {
+        m_alog->write(log::alevel::disconnect,"connection handle_terminate");
     }
 
     if (ec) {
         // there was an error actually shutting down the connection
-        log_err(log::elevel::devel,"handle_terminate",ec);
+        log_err(log::alevel::disconnect,"handle_terminate",ec);
     }
 
     // clean shutdown
@@ -1771,9 +1771,10 @@ void connection<config>::handle_terminate(terminate_status tstat,
         if (m_close_handler) {
             m_close_handler(m_connection_hdl);
         }
+        ////////////////////////////////////////////////////////////////////////////  wsc fix 2
         //log_close_result();
     } else {
-        m_elog->write(log::elevel::rerror,"Unknown terminate_status");
+        m_elog->write(log::alevel::disconnect,"Unknown terminate_status");
     }
 
     // call the termination handler if it exists
@@ -1783,10 +1784,11 @@ void connection<config>::handle_terminate(terminate_status tstat,
         try {
             m_termination_handler(type::get_shared());
         } catch (std::exception const & e) {
-            m_elog->write(log::elevel::warn,
+            m_elog->write(log::alevel::disconnect,
                 std::string("termination_handler call failed. Reason was: ")+e.what());
         }
     }
+    throw exception(ec);
 }
 
 template <typename config>
