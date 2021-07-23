@@ -218,7 +218,7 @@ bool loop(){
     }
 }
 void prom_init(){
-    prometheus::Exposer exposer{"127.0.0.1:"+PORT};
+    prometheus::Exposer exposer{"0.0.0.0:"+PORT};
     auto registry = std::make_shared<prometheus::Registry>();
     auto metric_name="WSC";
     auto metric_help="WS Client Performance Metrics";
