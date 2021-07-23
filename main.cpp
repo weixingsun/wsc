@@ -64,6 +64,7 @@ int N = 1;
 int R_CNT = 0;
 boost::thread_group tg;
 std::string IP="";
+std::string METRIC_NAME="";
 prometheus::Gauge* rate;
 prometheus::Gauge* reconn;
 prometheus::Gauge* lat99;
@@ -223,10 +224,10 @@ void prom_init(){
     auto metric_help="WS Client Performance Metrics";
     //auto& wsc_perf = BuildCounter().Name(metric_name).Help(metric_help).Register(*registry);
     auto& wsc_perf = prometheus::BuildGauge().Name(metric_name).Help(metric_help).Register(*registry);
-    rate   = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "rate"}});
-    reconn = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "reconn"}});
-    lat99  = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "lat99"}});
-    lat100 = &wsc_perf.Add({{"type", "guage"}, {"host", IP}, {"name", "lat100"}});
+    rate   = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"+METRIC_NAME}});  //{"host", IP}, 
+    reconn = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
+    lat99  = &wsc_perf.Add({{"type", "guage"}, {"name", "lat99"+METRIC_NAME}});
+    lat100 = &wsc_perf.Add({{"type", "guage"}, {"name", "lat100"+METRIC_NAME}});
     exposer.RegisterCollectable(registry);
 }
 void prom_upload(){
@@ -252,7 +253,14 @@ void threads_boost() {
     tg.create_thread(print);
     tg.join_all();
 }
-
+int nthSubstr(int n, const std::string& s, const std::string& p) {
+   std::string::size_type i = s.find(p);     // first index
+   int j=0;
+   for (j = 1; j < n && i != std::string::npos; ++j)
+      i = s.find(p, i+1); // Find the next index
+   if (j == n) return(i);
+   else return(-1);
+}
 //"wss://stream.binance.com:9443/ws/btcusdt@bookTicker";
 //"wss://stream.binance.com:9443/ws/!bookTicker";
 //"ws://172.20.150.230:9080/ws/!bookTicker";
@@ -284,6 +292,16 @@ void append_url(std::string SYMBOLS, std::string STREAMS){
             URL+=part;
         }
     }
+    if (streamv.size()>1){
+        METRIC_NAME="@mixed";
+    }else if (URL.find("!") != std::string::npos) {
+        METRIC_NAME="!bookTicker";
+    }else if (URL.find("@") != std::string::npos) {
+        int start = nthSubstr(1, URL, "@");
+        int end = nthSubstr(5, URL, "/");
+        METRIC_NAME=URL.substr (start,end-start);
+    }
+    
     std::cout<<URL<<std::endl;
 }
 int main(int argc, char** argv) {
