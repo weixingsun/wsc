@@ -823,12 +823,12 @@ protected:
         }
 
         // validate unmasked, decompressed values
-        if (m_current_msg->msg_ptr->get_opcode() == frame::opcode::TEXT) {
-            if (!m_current_msg->validator.decode(out.begin()+offset,out.end())) {
-                ec = make_error_code(error::invalid_utf8);
-                return 0;
-            }
-        }
+        //if (m_current_msg->msg_ptr->get_opcode() == frame::opcode::TEXT) {
+            //if (!m_current_msg->validator.decode(out.begin()+offset,out.end())) {
+            //    ec = make_error_code(error::invalid_utf8);
+            //    return 0;
+            //}
+        //}
 
         m_bytes_needed -= len;
 

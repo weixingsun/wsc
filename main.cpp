@@ -7,18 +7,22 @@
 #include <prometheus/registry.h>
 #include <spdlog/spdlog.h>
 #include <cxxopts.hpp>
-//#include <sys/sdt.h>
-//#include <thread>
 #include <iostream>
 #include <string>
 #include <boost/chrono.hpp>
+#include <boost/lexical_cast.hpp>
 #include <boost/thread.hpp>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#include <boost/uuid/uuid.hpp>            // uuid class
+#include <boost/uuid/uuid_generators.hpp> // generators
+#include <boost/uuid/uuid_io.hpp>
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 using websocketpp::lib::bind;
+//#include <sys/sdt.h>
+//#include <thread>
+//#include <ifaddrs.h>
+//#include <netinet/in.h>
+//#include <arpa/inet.h>
 
 typedef websocketpp::config::asio_client::message_type::ptr message_ptr;
 typedef std::shared_ptr<boost::asio::ssl::context> context_ptr;
@@ -45,76 +49,103 @@ struct deflate_config : public websocketpp::config::asio_client {
         typedef websocketpp::transport::asio::basic_socket::endpoint socket_type;
     };
 
-    typedef websocketpp::transport::asio::endpoint<transport_config> 
-        transport_type;
+    typedef websocketpp::transport::asio::endpoint<transport_config> transport_type;
         
     /// permessage_compress extension
-    struct permessage_deflate_config {};
+    struct permessage_deflate_config {
+        typedef core_client::request_type request_type;
+        static const bool allow_disabling_context_takeover = true;
+        static const uint8_t minimum_outgoing_window_bits = 15; //client_max_window_bits (8-15)
+    };
     typedef websocketpp::extensions::permessage_deflate::enabled <permessage_deflate_config> permessage_deflate_type;
+    //static const size_t max_message_size = 16000000;
+    //static const bool enable_extensions = true;
 };
 
-bool DEBUG=false;
+//bool DEBUG=false;
 bool ZIP=true;
 bool REC=true;
+bool TIMED=true;
 std::string URL="";
 std::string PORT="";
 int INTERVAL=1;
-int CNT = 0;
 int N = 1;
+int CNT = 0;
 int R_CNT = 0;
+int T_PCT = 1000;
+int TC_N = 0;
+//int TC_RN = 0;       // Timed Connection Running Counter
+//double LAVG = 0;
+double LMAX = 0;
+double LAT_SUM = 0;  // not an array/vector since worse perf
+int LAT_CNT = 0;
+const std::string JSON=R"({"method":"SET_PROPERTY","params":["timed",true],"id":1})";
 boost::thread_group tg;
-std::string IP="";
+//std::string IP="";
 std::string METRIC_NAME="";
 prometheus::Gauge* rate;
 prometheus::Gauge* reconn;
-prometheus::Gauge* lat99;
-prometheus::Gauge* lat100;
+prometheus::Gauge* latavg;
+prometheus::Gauge* latmax;
 
 std::string convertToString(char* a){
     std::string s = a;
     return s;
 }
-void get_ip() {
-    struct ifaddrs * ifAddrStruct=NULL;
-    struct ifaddrs * ifa=NULL;
-    void * tmpAddrPtr=NULL;
-
-    getifaddrs(&ifAddrStruct);
-    char addressBuffer[INET_ADDRSTRLEN];
-    for (ifa = ifAddrStruct; ifa != NULL; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr) {
-            continue;
-        }
-        std::string eth(ifa->ifa_name);
-        if (eth.rfind("lo", 0)==0|| eth.rfind("vir", 0)==0){
-            continue;
-        }
-        if (ifa->ifa_addr->sa_family == AF_INET) { // IP4
-            // is a valid IP4 Address
-            tmpAddrPtr=&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
-            inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
-            //printf("%s -> %s\n", ifa->ifa_name, addressBuffer);
-        }
-    }
-    if (ifAddrStruct!=NULL) freeifaddrs(ifAddrStruct);
-    IP=convertToString(addressBuffer);
-    std::cout<<"IP: "<<IP<<std::endl;
+void send_timed(websocketpp::client<websocketpp::config::asio_client> *c, websocketpp::connection_hdl hdl){
+    c->send(hdl, JSON, websocketpp::frame::opcode::text);
 }
+void ssend_timed(websocketpp::client<websocketpp::config::asio_tls_client> *c, websocketpp::connection_hdl hdl){
+    c->send(hdl, JSON, websocketpp::frame::opcode::text);
+}
+void zsend_timed(websocketpp::client<deflate_config> *c, websocketpp::connection_hdl hdl){
+    c->send(hdl, JSON, websocketpp::frame::opcode::text);
+}
+
 void on_message(websocketpp::connection_hdl hdl, message_ptr msg) {
     //spdlog::info("hdl: {} message: {}", hdl.lock().get(), msg->get_payload());
     CNT++;
-    if (DEBUG) {
-        spdlog::info("MSG: {}", msg->get_payload());
+    spdlog::debug("MSG: {}",msg->get_raw_payload());
+    //{"u":162673419,"s":"HBARBTC","b":"0.00000499","B":"5579.00000000","a":"0.00000500","A":"20621.00000000"}
+}
+void on_message_timed(websocketpp::connection_hdl hdl, message_ptr msg) {
+    //spdlog::info("hdl: {} message: {}", hdl.lock().get(), msg->get_payload());
+    CNT++;
+    spdlog::debug("MSG: {}",msg->get_raw_payload());
+    //{"stream":"!bookTicker","data":{"u":152478534,"s":"XVGETH","b":"0.917","B":"40479.0","a":"0.919","A":"17881.0"},"V":1627380845283,"Y":1627380845283,"W":1627380845283}
+    if (LAT_CNT%T_PCT==0){
+        LAT_CNT++;
+        //std::chrono::steady_clock //system_clock
+        const std::string& payload = msg->get_raw_payload();
+        std::size_t start = payload.rfind(R"("W":)");
+        if (start!=std::string::npos){
+            std::string ws = payload.substr(start+4,13);
+            //std::cout<<ws<<std::endl;
+            //unsigned long long W = std::stoull(ws); //msg->get_payload().W;
+            //unsigned long now = boost::chrono::steady_clock::now().time_since_epoch() / boost::chrono::milliseconds(1);
+            unsigned long W = std::stoull(ws);
+            unsigned long now = boost::chrono::duration_cast<boost::chrono::milliseconds>(boost::chrono::system_clock::now().time_since_epoch()).count();
+            //std::cout<<now<<"-"<<W<<std::endl;
+            unsigned long LAT=now-W;
+            LAT_SUM+=LAT;
+            if (LMAX<LAT) LMAX=LAT;
+        }
     }
 }
 void on_open_tls(websocketpp::client<websocketpp::config::asio_tls_client> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
+    spdlog::debug("TLS Connection: opened");
+    ssend_timed(c,hdl);
 }
 void on_open_no_tls(websocketpp::client<websocketpp::config::asio_client> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
+    spdlog::debug("Non-TLS Connection: opened");
+    send_timed(c,hdl);
 }
 void on_open_no_tls_zip(websocketpp::client<deflate_config> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
+    spdlog::debug("Zip Non-TLS Connection: opened");
+    zsend_timed(c,hdl);
 }
 static context_ptr on_tls_init() {
     // establishes a SSL connection
@@ -135,10 +166,34 @@ void books(){
         c.clear_access_channels(websocketpp::log::alevel::none);
         c.init_asio();
         c.set_tls_init_handler(bind(&on_tls_init));
-        c.set_open_handler(bind(&on_open_tls, &c, ::_1));
+        //c.set_open_handler(bind(&on_open_tls, &c, ::_1));
         c.set_message_handler(bind(&on_message, ::_1, ::_2));
         websocketpp::lib::error_code ec;
         websocketpp::client<websocketpp::config::asio_tls_client>::connection_ptr conn = c.get_connection(URL, ec);
+        if (ec) {
+            spdlog::error("could not create connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        std::cout << e.what() << std::endl;
+        spdlog::error("Books error: {}", e.what());
+    }
+}
+void bookst(){
+    websocketpp::client<websocketpp::config::asio_tls_client> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none);
+        c.init_asio();
+        c.set_tls_init_handler(bind(&on_tls_init));
+        c.set_open_handler(bind(&on_open_tls, &c, ::_1));
+        c.set_message_handler(bind(&on_message_timed, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<websocketpp::config::asio_tls_client>::connection_ptr conn = c.get_connection(URL, ec);
+        conn->append_header("User-Agent","WSC-perf v1");
+        conn->append_header("X-Tracky-ID",boost::lexical_cast<std::string>(boost::uuids::random_generator()()));
         if (ec) {
             spdlog::error("could not create connection because: {}", ec.message());
             return;
@@ -156,10 +211,33 @@ void book(){
         c.set_access_channels(websocketpp::log::alevel::none);
         c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
         c.init_asio();
-        c.set_open_handler(bind(&on_open_no_tls, &c, ::_1));
+        //c.set_open_handler(bind(&on_open_no_tls, &c, ::_1));
         c.set_message_handler(bind(&on_message, ::_1, ::_2));
         websocketpp::lib::error_code ec;
         websocketpp::client<websocketpp::config::asio_client>::connection_ptr conn = c.get_connection(URL, ec);
+        if (ec) {
+            spdlog::error("could not create connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        std::cout << e.what() << std::endl;
+        spdlog::error("Book error: {}", e.what());
+    }
+}
+void bookt(){
+    websocketpp::client<websocketpp::config::asio_client> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
+        c.init_asio();
+        c.set_open_handler(bind(&on_open_no_tls, &c, ::_1));
+        c.set_message_handler(bind(&on_message_timed, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<websocketpp::config::asio_client>::connection_ptr conn = c.get_connection(URL, ec);
+        conn->append_header("User-Agent","WSC-perf v1");
+        conn->append_header("X-Tracky-ID",boost::lexical_cast<std::string>(boost::uuids::random_generator()()));
         if (ec) {
             spdlog::error("could not create connection because: {}", ec.message());
             return;
@@ -177,10 +255,12 @@ void bookz(){
         c.set_access_channels(websocketpp::log::alevel::none);
         c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
         c.init_asio();
-        c.set_open_handler(bind(&on_open_no_tls_zip, &c, ::_1));
+        //c.set_open_handler(bind(&on_open_no_tls_zip, &c, ::_1));
         c.set_message_handler(bind(&on_message, ::_1, ::_2));
         websocketpp::lib::error_code ec;
         websocketpp::client<deflate_config>::connection_ptr conn = c.get_connection(URL, ec);
+        //const std::string header = conn->get_request_header();
+        //std::cout<<"header: "<<header<<std::endl;
         if (ec) {
             spdlog::error("could not create connection because: {}", ec.message());
             return;
@@ -191,6 +271,32 @@ void bookz(){
         //     t1.join()
         //     boost::this_thread::sleep_for(boost::chrono::milliseconds(10));
         // }
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        //std::cout << e.what() << std::endl;
+        //spdlog::error("Bookz error: {}", e.what());
+    }
+}
+void bookzt(){
+    websocketpp::client<deflate_config> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
+        c.init_asio();
+        c.set_open_handler(bind(&on_open_no_tls_zip, &c, ::_1));
+        c.set_message_handler(bind(&on_message_timed, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<deflate_config>::connection_ptr conn = c.get_connection(URL, ec);
+        //std::cout<<"Timed Connection Running: "<<TC_RN<<std::endl;
+        conn->append_header("User-Agent","WSC-perf v1");
+        conn->append_header("X-Tracky-ID",boost::lexical_cast<std::string>(boost::uuids::random_generator()()));
+        //const std::string header = conn->get_request_header();
+        //std::cout<<"header: "<<header<<std::endl;
+        if (ec) {
+            spdlog::error("could not create timed connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
         c.run();
     } catch (websocketpp::exception const &e) {
         //std::cout << e.what() << std::endl;
@@ -217,6 +323,26 @@ bool loop(){
         R_CNT++;
     }
 }
+bool loopt(){
+    for ( ;; ) {
+        try {
+            if (URL.rfind("wss", 0) == 0){
+                bookst();
+            }else if (ZIP) {
+                bookzt();
+            }else{
+                bookt();
+            }
+            if (REC==false){
+                return true;
+            }
+        }catch ( ... ) {
+            //if ( yes ) return false;
+        }
+        //std::cout << "reconnect (" <<DURATION<<")"<< std::endl;
+        R_CNT++;
+    }
+}
 void prom_init(){
     prometheus::Exposer exposer{"0.0.0.0:"+PORT};
     auto registry = std::make_shared<prometheus::Registry>();
@@ -226,27 +352,41 @@ void prom_init(){
     auto& wsc_perf = prometheus::BuildGauge().Name(metric_name).Help(metric_help).Register(*registry);
     rate   = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"+METRIC_NAME}});  //{"host", IP}, 
     reconn = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
-    lat99  = &wsc_perf.Add({{"type", "guage"}, {"name", "lat99"+METRIC_NAME}});
-    lat100 = &wsc_perf.Add({{"type", "guage"}, {"name", "lat100"+METRIC_NAME}});
+    latavg  = &wsc_perf.Add({{"type", "guage"}, {"name", "latavg"+METRIC_NAME}});
+    latmax = &wsc_perf.Add({{"type", "guage"}, {"name", "latmax"+METRIC_NAME}});
     exposer.RegisterCollectable(registry);
 }
 void prom_upload(){
     rate->Set(CNT);
+    CNT=0;
     reconn->Set(R_CNT);
-    lat99->Set(0);
-    lat100->Set(0);
+    R_CNT=0;
+    if (LAT_CNT>0){
+        latavg->Set(LAT_SUM/LAT_CNT);
+        latmax->Set(LMAX);
+        LAT_CNT=0;
+    }
+    LAT_SUM=0;
+    LMAX=0;
 }
 void print() {
-    while(true){ //std::chrono::steady_clock::now()
+    while(true){
         boost::this_thread::sleep_for(boost::chrono::seconds(INTERVAL));
-        spdlog::info("Reconnect[{}] MSG Rate: {}/s", R_CNT,CNT);
-        CNT=0;
+        double Lavg=0;
+        if (LAT_CNT>0){
+            Lavg=LAT_SUM/LAT_CNT;
+        }
+        spdlog::warn("Reconnect[{}] LAT {:03.2f} - {:03.2f} Rate: {} /s ",R_CNT,Lavg,LMAX,CNT);
         prom_upload();
     }
 }
 
 void threads_boost() {
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < TC_N; i++) {
+        tg.create_thread(loopt);
+        boost::this_thread::sleep_for(boost::chrono::milliseconds(1));
+    }
+    for (int i = TC_N; i < N; i++) {
         tg.create_thread(loop);
         boost::this_thread::sleep_for(boost::chrono::milliseconds(1));
     }
@@ -280,10 +420,6 @@ void append_url(std::string SYMBOLS, std::string STREAMS){
         getline(sm, substr, ',');
         if (substr.size()>0) streamv.push_back(substr);
     }
-    if (DEBUG){
-        std::cout<<"SYMBOLS="<<SYMBOLS<<"STREAMS="<<STREAMS<<std::endl;
-        std::cout<<"symbolv="<<symbolv.size()<<"streamv="<<streamv.size()<<std::endl;
-    }
     for(int i = 0; i<streamv.size(); i++) {
         auto stream = streamv.at(i);
         for(int i = 0; i<symbolv.size(); i++) {
@@ -307,35 +443,47 @@ void append_url(std::string SYMBOLS, std::string STREAMS){
 int main(int argc, char** argv) {
     cxxopts::Options options("wsclient", "websocket client for binance stream");
     options.add_options()
-        ("d,debug",   "Enable debugging",   cxxopts::value<bool>()->default_value("false"))
+        ("g,debug",   "Enable debugging",   cxxopts::value<bool>()->default_value("false"))
         ("v,verbose", "Verbose output",     cxxopts::value<bool>()->default_value("false"))
         ("z,zlib",    "Permessage Deflate", cxxopts::value<bool>()->default_value("true"))
         ("r,reconn",  "Reconnect on error", cxxopts::value<bool>()->default_value("true"))
+        ("l,lat",     "Timed Latency",      cxxopts::value<bool>()->default_value("false"))
+        ("c,tcpct",   "Timed Conn Percentage", cxxopts::value<int>()->default_value("100"))
+        ("d,tpct",    "Timed Percentage",   cxxopts::value<int>()->default_value("1000")) //sampling every N msg
         ("u,url",     "URL",                cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443/ws/!bookTicker"))
         ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value(""))  //btcusdt,ethusdt
         ("m,streams", "Streams",            cxxopts::value<std::string>()->default_value(""))  //bookTicker
         ("t,threads", "Threads",            cxxopts::value<int>()->default_value("1"))
-        //("n,duration","Duration",         cxxopts::value<int>()->default_value("60"))
         ("i,interval","Interval",           cxxopts::value<int>()->default_value("1"))
-        ("f,freq",    "Sampling Frequency", cxxopts::value<int>()->default_value("1000")) //sampling every N msg
         ("p,promport","Prometheus Port",    cxxopts::value<std::string>()->default_value("8080"))
         ("h,help",    "Print usage")
+        //("n,duration","Duration",         cxxopts::value<int>()->default_value("60"))
     ;
     auto result = options.parse(argc, argv);
     if (result.count("help")){
       std::cout << options.help() << std::endl;
       exit(0);
     }
-    DEBUG = result["debug"].as<bool>();
+    bool DEBUG = result["debug"].as<bool>();
+    if (DEBUG) spdlog::set_level(spdlog::level::debug);
+    else spdlog::set_level(spdlog::level::warn);
     URL=result["url"].as<std::string>();
     INTERVAL=result["interval"].as<int>();
     N=result["threads"].as<int>();
     REC=result["reconn"].as<bool>();
+    TIMED=result["lat"].as<bool>();
     PORT=result["promport"].as<std::string>();
     std::cout<<"Prometheus Port: "<<PORT<<std::endl;
+    T_PCT=result["tpct"].as<int>();
+    int TC_PCT=result["tcpct"].as<int>();
+    if (TIMED){
+        TC_N=(int)(N*TC_PCT/100);
+        if (TC_N<1) TC_N=1;
+        std::cout<<"Timed Connection: "<<TC_N<<"/"<<N<<std::endl;
+    }
     //DURATION=result["duration"].as<int>();
     append_url(result["symbols"].as<std::string>(),result["streams"].as<std::string>());
-    get_ip();
+    //get_ip();
     prom_init();
     threads_boost();
     return 0;

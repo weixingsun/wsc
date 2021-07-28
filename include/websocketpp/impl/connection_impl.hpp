@@ -1571,13 +1571,13 @@ void connection<config>::handle_read_http_response(lib::error_code const & ec,
     if (ecm) {
         if (ecm == transport::error::eof && m_state == session::state::closed) {
             // we expect to get eof if the connection is closed already
-            m_alog->write(log::alevel::devel,
-                    "got (expected) eof/state error from closed con");
+            m_alog->write(log::alevel::devel, "got (expected) eof/state error from closed con");
             return;
         }
         
-        log_err(log::elevel::rerror,"handle_read_http_response",ecm);
+        //log_err(log::elevel::rerror,"handle_read_http_response",ecm);
         this->terminate(ecm);
+        throw exception(ec);
         return;
     }
     
