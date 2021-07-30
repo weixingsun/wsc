@@ -71,8 +71,9 @@ std::string PORT="";
 int INTERVAL=1;
 int N = 1;
 int CNT = 0;
+int T_CNT = 0;
 int R_CNT = 0;
-int T_PCT = 1000;
+int T_SAMPLE = 1000;
 int TC_N = 0;
 //int TC_RN = 0;       // Timed Connection Running Counter
 //double LAVG = 0;
@@ -109,26 +110,26 @@ void on_message(websocketpp::connection_hdl hdl, message_ptr msg) {
     //{"u":162673419,"s":"HBARBTC","b":"0.00000499","B":"5579.00000000","a":"0.00000500","A":"20621.00000000"}
 }
 void on_message_timed(websocketpp::connection_hdl hdl, message_ptr msg) {
-    //spdlog::info("hdl: {} message: {}", hdl.lock().get(), msg->get_payload());
     CNT++;
-    spdlog::debug("MSG: {}",msg->get_raw_payload());
+    T_CNT++;
     //{"stream":"!bookTicker","data":{"u":152478534,"s":"XVGETH","b":"0.917","B":"40479.0","a":"0.919","A":"17881.0"},"V":1627380845283,"Y":1627380845283,"W":1627380845283}
-    if (LAT_CNT%T_PCT==0){
-        LAT_CNT++;
+    if (T_CNT%T_SAMPLE==0){
         //std::chrono::steady_clock //system_clock
         const std::string& payload = msg->get_raw_payload();
         std::size_t start = payload.rfind(R"("W":)");
+        spdlog::debug("MSG: {}",msg->get_raw_payload());
+        spdlog::debug("T_CNT={} T_SAMPLE={} LAT_CNT={} ",T_CNT,T_SAMPLE,LAT_CNT);
         if (start!=std::string::npos){
+            LAT_CNT++;
             std::string ws = payload.substr(start+4,13);
-            //std::cout<<ws<<std::endl;
             //unsigned long long W = std::stoull(ws); //msg->get_payload().W;
             //unsigned long now = boost::chrono::steady_clock::now().time_since_epoch() / boost::chrono::milliseconds(1);
             unsigned long W = std::stoull(ws);
             unsigned long now = boost::chrono::duration_cast<boost::chrono::milliseconds>(boost::chrono::system_clock::now().time_since_epoch()).count();
             //std::cout<<now<<"-"<<W<<std::endl;
-            unsigned long LAT=now-W;
-            LAT_SUM+=LAT;
-            if (LMAX<LAT) LMAX=LAT;
+            unsigned long lat=now-W;
+            LAT_SUM+=lat;
+            if (LMAX<lat) LMAX=lat;
         }
     }
 }
@@ -359,6 +360,7 @@ void prom_init(){
 void prom_upload(){
     rate->Set(CNT);
     CNT=0;
+    T_CNT=0;
     reconn->Set(R_CNT);
     R_CNT=0;
     if (LAT_CNT>0){
@@ -376,7 +378,7 @@ void print() {
         if (LAT_CNT>0){
             Lavg=LAT_SUM/LAT_CNT;
         }
-        spdlog::warn("Reconnect[{}] LAT {:03.2f} - {:03.2f} Rate: {} /s ",R_CNT,Lavg,LMAX,CNT);
+        spdlog::warn("Reconn[{}] LAT[{}] {:03.2f} - {:03.2f} ms. Rate: {} /s ",R_CNT,LAT_CNT,Lavg,LMAX,(int)(CNT/INTERVAL));
         prom_upload();
     }
 }
@@ -449,7 +451,7 @@ int main(int argc, char** argv) {
         ("r,reconn",  "Reconnect on error", cxxopts::value<bool>()->default_value("true"))
         ("l,lat",     "Timed Latency",      cxxopts::value<bool>()->default_value("false"))
         ("c,tcpct",   "Timed Conn Percentage", cxxopts::value<int>()->default_value("100"))
-        ("d,tpct",    "Timed Percentage",   cxxopts::value<int>()->default_value("1000")) //sampling every N msg
+        ("d,tsmpl",   "Timed Sampling",     cxxopts::value<int>()->default_value("1000")) //sampling every N msg
         ("u,url",     "URL",                cxxopts::value<std::string>()->default_value("wss://stream.binance.com:9443/ws/!bookTicker"))
         ("s,symbols", "Symbols",            cxxopts::value<std::string>()->default_value(""))  //btcusdt,ethusdt
         ("m,streams", "Streams",            cxxopts::value<std::string>()->default_value(""))  //bookTicker
@@ -474,7 +476,7 @@ int main(int argc, char** argv) {
     TIMED=result["lat"].as<bool>();
     PORT=result["promport"].as<std::string>();
     std::cout<<"Prometheus Port: "<<PORT<<std::endl;
-    T_PCT=result["tpct"].as<int>();
+    T_SAMPLE=result["tsmpl"].as<int>();
     int TC_PCT=result["tcpct"].as<int>();
     if (TIMED){
         TC_N=(int)(N*TC_PCT/100);
@@ -483,7 +485,8 @@ int main(int argc, char** argv) {
     }
     //DURATION=result["duration"].as<int>();
     append_url(result["symbols"].as<std::string>(),result["streams"].as<std::string>());
-    //get_ip();
+    //get_ip(); 
+    std::cout<<"[TimeStamp] [warning] Re-connections[#] LAT[Samples] avg - max ms. Rate: msg / second"<<std::endl;
     prom_init();
     threads_boost();
     return 0;
