@@ -55,6 +55,40 @@ struct deflate_config : public websocketpp::config::asio_client {
     struct permessage_deflate_config {
         typedef core_client::request_type request_type;
         static const bool allow_disabling_context_takeover = true;
+        static const uint8_t minimum_outgoing_window_bits = 8; //client_max_window_bits (8-15)
+    };
+    typedef websocketpp::extensions::permessage_deflate::enabled <permessage_deflate_config> permessage_deflate_type;
+    //static const size_t max_message_size = 16000000;
+    //static const bool enable_extensions = true;
+};
+struct deflate_config_15 : public websocketpp::config::asio_client {
+    typedef deflate_config_15 type;
+    typedef asio_client base;
+    typedef base::concurrency_type concurrency_type;
+    typedef base::request_type request_type;
+    typedef base::response_type response_type;
+    typedef base::message_type message_type;
+    typedef base::con_msg_manager_type con_msg_manager_type;
+    typedef base::endpoint_msg_manager_type endpoint_msg_manager_type;
+    typedef base::alog_type alog_type;
+    typedef base::elog_type elog_type;
+    typedef base::rng_type rng_type;
+    
+    struct transport_config : public base::transport_config {
+        typedef type::concurrency_type concurrency_type;
+        typedef type::alog_type alog_type;
+        typedef type::elog_type elog_type;
+        typedef type::request_type request_type;
+        typedef type::response_type response_type;
+        typedef websocketpp::transport::asio::basic_socket::endpoint socket_type;
+    };
+
+    typedef websocketpp::transport::asio::endpoint<transport_config> transport_type;
+        
+    /// permessage_compress extension
+    struct permessage_deflate_config {
+        typedef core_client::request_type request_type;
+        static const bool allow_disabling_context_takeover = true;
         static const uint8_t minimum_outgoing_window_bits = 15; //client_max_window_bits (8-15)
     };
     typedef websocketpp::extensions::permessage_deflate::enabled <permessage_deflate_config> permessage_deflate_type;
@@ -62,22 +96,20 @@ struct deflate_config : public websocketpp::config::asio_client {
     //static const bool enable_extensions = true;
 };
 
-//bool DEBUG=false;
 bool ZIP=true;
 bool REC=true;
 bool TIMED=true;
 std::string URL="";
 std::string PORT="";
+int WIN_BITS=8;
 int INTERVAL=1;
+int R_CNT = 0;
 int N = 1;
 int CNT = 0;
 int T_CNT = 0;
-int R_CNT = 0;
 int T_SAMPLE = 1000;
-int TC_N = 0;
-//int TC_RN = 0;       // Timed Connection Running Counter
-//double LAVG = 0;
-double LMAX = 0;
+int TC_N = 0;        // Timed Connection Running Counter
+double LAT_MAX = 0;
 double LAT_SUM = 0;  // not an array/vector since worse perf
 int LAT_CNT = 0;
 const std::string JSON=R"({"method":"SET_PROPERTY","params":["timed",true],"id":1})";
@@ -102,6 +134,9 @@ void ssend_timed(websocketpp::client<websocketpp::config::asio_tls_client> *c, w
 void zsend_timed(websocketpp::client<deflate_config> *c, websocketpp::connection_hdl hdl){
     c->send(hdl, JSON, websocketpp::frame::opcode::text);
 }
+void z15_send_timed(websocketpp::client<deflate_config_15> *c, websocketpp::connection_hdl hdl){
+    c->send(hdl, JSON, websocketpp::frame::opcode::text);
+}
 
 void on_message(websocketpp::connection_hdl hdl, message_ptr msg) {
     //spdlog::info("hdl: {} message: {}", hdl.lock().get(), msg->get_payload());
@@ -118,7 +153,7 @@ void on_message_timed(websocketpp::connection_hdl hdl, message_ptr msg) {
         const std::string& payload = msg->get_raw_payload();
         std::size_t start = payload.rfind(R"("W":)");
         spdlog::debug("MSG: {}",msg->get_raw_payload());
-        spdlog::debug("T_CNT={} T_SAMPLE={} LAT_CNT={} ",T_CNT,T_SAMPLE,LAT_CNT);
+        //spdlog::debug("T_CNT={} T_SAMPLE={} LAT_CNT={} ",T_CNT,T_SAMPLE,LAT_CNT);
         if (start!=std::string::npos){
             LAT_CNT++;
             std::string ws = payload.substr(start+4,13);
@@ -129,7 +164,7 @@ void on_message_timed(websocketpp::connection_hdl hdl, message_ptr msg) {
             //std::cout<<now<<"-"<<W<<std::endl;
             unsigned long lat=now-W;
             LAT_SUM+=lat;
-            if (LMAX<lat) LMAX=lat;
+            if (LAT_MAX<lat) LAT_MAX=lat;
         }
     }
 }
@@ -147,6 +182,11 @@ void on_open_no_tls_zip(websocketpp::client<deflate_config> *c, websocketpp::con
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
     spdlog::debug("Zip Non-TLS Connection: opened");
     zsend_timed(c,hdl);
+}
+void on_open_no_tls_zip15(websocketpp::client<deflate_config_15> *c, websocketpp::connection_hdl hdl) {
+    //spdlog::info("connection open: hdl {} ", hdl.lock().get());
+    spdlog::debug("Zip15 Non-TLS Connection: opened");
+    z15_send_timed(c,hdl);
 }
 static context_ptr on_tls_init() {
     // establishes a SSL connection
@@ -278,6 +318,29 @@ void bookz(){
         //spdlog::error("Bookz error: {}", e.what());
     }
 }
+void bookz15(){
+    websocketpp::client<deflate_config_15> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
+        c.init_asio();
+        //c.set_open_handler(bind(&on_open_no_tls_zip, &c, ::_1));
+        c.set_message_handler(bind(&on_message, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<deflate_config_15>::connection_ptr conn = c.get_connection(URL, ec);
+        //const std::string header = conn->get_request_header();
+        //std::cout<<"header: "<<header<<std::endl;
+        if (ec) {
+            spdlog::error("could not create connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        //std::cout << e.what() << std::endl;
+        //spdlog::error("Bookz error: {}", e.what());
+    }
+}
 void bookzt(){
     websocketpp::client<deflate_config> c;
     try {
@@ -304,13 +367,40 @@ void bookzt(){
         //spdlog::error("Bookz error: {}", e.what());
     }
 }
+void bookz15t(){
+    websocketpp::client<deflate_config_15> c;
+    try {
+        c.set_access_channels(websocketpp::log::alevel::none);
+        c.clear_access_channels(websocketpp::log::alevel::none); //frame_payload
+        c.init_asio();
+        c.set_open_handler(bind(&on_open_no_tls_zip15, &c, ::_1));
+        c.set_message_handler(bind(&on_message_timed, ::_1, ::_2));
+        websocketpp::lib::error_code ec;
+        websocketpp::client<deflate_config_15>::connection_ptr conn = c.get_connection(URL, ec);
+        //std::cout<<"Timed Connection Running: "<<TC_RN<<std::endl;
+        conn->append_header("User-Agent","WSC-perf v1");
+        conn->append_header("X-Tracky-ID",boost::lexical_cast<std::string>(boost::uuids::random_generator()()));
+        //const std::string header = conn->get_request_header();
+        //std::cout<<"header: "<<header<<std::endl;
+        if (ec) {
+            spdlog::error("could not create timed connection because: {}", ec.message());
+            return;
+        }
+        c.connect(conn);
+        c.run();
+    } catch (websocketpp::exception const &e) {
+        //std::cout << e.what() << std::endl;
+        //spdlog::error("Bookz error: {}", e.what());
+    }
+}
 bool loop(){
     for ( ;; ) {
         try {
             if (URL.rfind("wss", 0) == 0){
                 books();
             }else if (ZIP) {
-                bookz();
+                if (WIN_BITS>8) bookz15();
+                else bookz();
             }else{
                 book();
             }
@@ -330,7 +420,8 @@ bool loopt(){
             if (URL.rfind("wss", 0) == 0){
                 bookst();
             }else if (ZIP) {
-                bookzt();
+                if (WIN_BITS>8) bookz15t();
+                else bookzt();
             }else{
                 bookt();
             }
@@ -347,14 +438,14 @@ bool loopt(){
 void prom_init(){
     prometheus::Exposer exposer{"0.0.0.0:"+PORT};
     auto registry = std::make_shared<prometheus::Registry>();
-    auto metric_name="WSC";
+    auto metric_name="wsc_performance";
     auto metric_help="WS Client Performance Metrics";
     //auto& wsc_perf = BuildCounter().Name(metric_name).Help(metric_help).Register(*registry);
     auto& wsc_perf = prometheus::BuildGauge().Name(metric_name).Help(metric_help).Register(*registry);
-    rate   = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"+METRIC_NAME}});  //{"host", IP}, 
-    reconn = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
+    rate    = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"  +METRIC_NAME}});  //{"host", IP}, 
+    reconn  = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
     latavg  = &wsc_perf.Add({{"type", "guage"}, {"name", "latavg"+METRIC_NAME}});
-    latmax = &wsc_perf.Add({{"type", "guage"}, {"name", "latmax"+METRIC_NAME}});
+    latmax  = &wsc_perf.Add({{"type", "guage"}, {"name", "latmax"+METRIC_NAME}});
     exposer.RegisterCollectable(registry);
 }
 void prom_upload(){
@@ -365,11 +456,11 @@ void prom_upload(){
     R_CNT=0;
     if (LAT_CNT>0){
         latavg->Set(LAT_SUM/LAT_CNT);
-        latmax->Set(LMAX);
+        latmax->Set(LAT_MAX);
         LAT_CNT=0;
     }
     LAT_SUM=0;
-    LMAX=0;
+    LAT_MAX=0;
 }
 void print() {
     while(true){
@@ -378,7 +469,7 @@ void print() {
         if (LAT_CNT>0){
             Lavg=LAT_SUM/LAT_CNT;
         }
-        spdlog::warn("Reconn[{}] LAT[{}] {:03.2f} - {:03.2f} ms. Rate: {} /s ",R_CNT,LAT_CNT,Lavg,LMAX,(int)(CNT/INTERVAL));
+        spdlog::warn("Reconn[{}] LAT[{}] {:03.2f} - {:03.2f} ms. Rate: {} /s ",R_CNT,LAT_CNT,Lavg,LAT_MAX,(int)(CNT/INTERVAL));
         prom_upload();
     }
 }
@@ -403,8 +494,6 @@ int nthSubstr(int n, const std::string& s, const std::string& p) {
    if (j == n) return(i);
    else return(-1);
 }
-//"wss://stream.binance.com:9443/ws/btcusdt@bookTicker";
-//"wss://stream.binance.com:9443/ws/!bookTicker";
 //"ws://172.20.150.230:9080/ws/!bookTicker";
 //"ws://172.20.150.230:9080/ws/btc001@bookTicker/btc002@bookTicker/btc003@bookTicker/btc004@bookTicker/btc005@bookTicker"
 void append_url(std::string SYMBOLS, std::string STREAMS){
@@ -446,7 +535,7 @@ int main(int argc, char** argv) {
     cxxopts::Options options("wsclient", "websocket client for binance stream");
     options.add_options()
         ("g,debug",   "Enable debugging",   cxxopts::value<bool>()->default_value("false"))
-        ("v,verbose", "Verbose output",     cxxopts::value<bool>()->default_value("false"))
+        ("v,version", "Version output",     cxxopts::value<bool>()->default_value("false"))
         ("z,zlib",    "Permessage Deflate", cxxopts::value<bool>()->default_value("true"))
         ("r,reconn",  "Reconnect on error", cxxopts::value<bool>()->default_value("true"))
         ("l,lat",     "Timed Latency",      cxxopts::value<bool>()->default_value("false"))
@@ -457,13 +546,18 @@ int main(int argc, char** argv) {
         ("m,streams", "Streams",            cxxopts::value<std::string>()->default_value(""))  //bookTicker
         ("t,threads", "Threads",            cxxopts::value<int>()->default_value("1"))
         ("i,interval","Interval",           cxxopts::value<int>()->default_value("1"))
-        ("p,promport","Prometheus Port",    cxxopts::value<std::string>()->default_value("8080"))
+        ("w,win_bits","Deflate Window Bits",cxxopts::value<int>()->default_value("8"))
+        ("p,promport","Prometheus Port",    cxxopts::value<std::string>()->default_value("9338"))
         ("h,help",    "Print usage")
         //("n,duration","Duration",         cxxopts::value<int>()->default_value("60"))
     ;
     auto result = options.parse(argc, argv);
     if (result.count("help")){
       std::cout << options.help() << std::endl;
+      exit(0);
+    }
+    if (result.count("version")){
+      std::cout << "websocket client for binance stream\n" << "version: 0.0.1" << std::endl;
       exit(0);
     }
     bool DEBUG = result["debug"].as<bool>();
@@ -476,6 +570,11 @@ int main(int argc, char** argv) {
     TIMED=result["lat"].as<bool>();
     PORT=result["promport"].as<std::string>();
     std::cout<<"Prometheus Port: "<<PORT<<std::endl;
+    WIN_BITS=result["win_bits"].as<int>();
+    if (WIN_BITS!=8 && WIN_BITS!=15){
+        std::cout<<"Invalid Deflate Window Bits: "<<WIN_BITS<<std::endl;
+        exit(0);
+    }
     T_SAMPLE=result["tsmpl"].as<int>();
     int TC_PCT=result["tcpct"].as<int>();
     if (TIMED){
