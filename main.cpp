@@ -2,9 +2,6 @@
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/extensions/permessage_deflate/enabled.hpp>
 #include <websocketpp/client.hpp>
-#include <prometheus/counter.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
 #include <spdlog/spdlog.h>
 #include <cxxopts.hpp>
 #include <iostream>
@@ -15,6 +12,9 @@
 #include <boost/uuid/uuid.hpp>            // uuid class
 #include <boost/uuid/uuid_generators.hpp> // generators
 #include <boost/uuid/uuid_io.hpp>
+#include <prometheus/gauge.h>
+#include <prometheus/exposer.h>
+#include <prometheus/registry.h>
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 using websocketpp::lib::bind;
@@ -435,32 +435,21 @@ bool loopt(){
         R_CNT++;
     }
 }
-void prom_init(){
-    prometheus::Exposer exposer{"0.0.0.0:"+PORT};
-    auto registry = std::make_shared<prometheus::Registry>();
-    auto metric_name="wsc_performance";
-    auto metric_help="WS Client Performance Metrics";
-    //auto& wsc_perf = BuildCounter().Name(metric_name).Help(metric_help).Register(*registry);
-    auto& wsc_perf = prometheus::BuildGauge().Name(metric_name).Help(metric_help).Register(*registry);
-    rate    = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"  +METRIC_NAME}});  //{"host", IP}, 
-    reconn  = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
-    latavg  = &wsc_perf.Add({{"type", "guage"}, {"name", "latavg"+METRIC_NAME}});
-    latmax  = &wsc_perf.Add({{"type", "guage"}, {"name", "latmax"+METRIC_NAME}});
-    exposer.RegisterCollectable(registry);
-}
 void prom_upload(){
-    rate->Set(CNT);
-    CNT=0;
-    T_CNT=0;
-    reconn->Set(R_CNT);
-    R_CNT=0;
-    if (LAT_CNT>0){
-        latavg->Set(LAT_SUM/LAT_CNT);
-        latmax->Set(LAT_MAX);
-        LAT_CNT=0;
+    if (rate){
+        rate->Set(CNT);
+        CNT=0;
+        T_CNT=0;
+        reconn->Set(R_CNT);
+        R_CNT=0;
+        if (LAT_CNT>0){
+            latavg->Set(LAT_SUM/LAT_CNT);
+            latmax->Set(LAT_MAX);
+            LAT_CNT=0;
+        }
+        LAT_SUM=0;
+        LAT_MAX=0;
     }
-    LAT_SUM=0;
-    LAT_MAX=0;
 }
 void print() {
     while(true){
@@ -473,6 +462,24 @@ void print() {
         prom_upload();
     }
 }
+void prom_init(){
+    prometheus::Exposer exposer{PORT};
+    auto registry = std::make_shared<prometheus::Registry>();
+    auto& wsc_rate   = prometheus::BuildGauge().Name("wsc_client_rate")  .Help("").Labels({{"key","rate"}}).Register(*registry);
+    auto& wsc_latavg = prometheus::BuildGauge().Name("wsc_client_latavg").Help("").Labels({{"key","latavg"}}).Register(*registry);
+    auto& wsc_latmax = prometheus::BuildGauge().Name("wsc_client_latmax").Help("").Labels({{"key","latmax"}}).Register(*registry);
+    auto& wsc_reconn = prometheus::BuildGauge().Name("wsc_client_reconn").Help("").Labels({{"key","reconn"}}).Register(*registry);
+    //rate    = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"  +METRIC_NAME}});  //{"host", IP},
+    //reconn  = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
+    //latavg  = &wsc_perf.Add({{"type", "guage"}, {"name", "latavg"+METRIC_NAME}});
+    //latmax  = &wsc_perf.Add({{"type", "guage"}, {"name", "latmax"+METRIC_NAME}});
+    rate    = &wsc_rate.Add({});
+    reconn  = &wsc_reconn.Add({});
+    latavg  = &wsc_latavg.Add({});
+    latmax  = &wsc_latmax.Add({});
+    exposer.RegisterCollectable(registry);
+    print();
+}
 
 void threads_boost() {
     for (int i = 0; i < TC_N; i++) {
@@ -483,7 +490,8 @@ void threads_boost() {
         tg.create_thread(loop);
         boost::this_thread::sleep_for(boost::chrono::milliseconds(1));
     }
-    tg.create_thread(print);
+    //tg.create_thread(print);
+    tg.create_thread(prom_init);
     tg.join_all();
 }
 int nthSubstr(int n, const std::string& s, const std::string& p) {
@@ -586,7 +594,6 @@ int main(int argc, char** argv) {
     append_url(result["symbols"].as<std::string>(),result["streams"].as<std::string>());
     //get_ip(); 
     std::cout<<"[TimeStamp] [warning] Re-connections[#] LAT[Samples] avg - max ms. Rate: msg / second"<<std::endl;
-    prom_init();
     threads_boost();
     return 0;
 }
