@@ -438,7 +438,7 @@ bool loopt(){
 }
 void prom_upload(){
     if (rate){
-        rate->Set(CNT);
+        rate->Set(CNT/INTERVAL);
         CNT=0;
         T_CNT=0;
         reconn->Set(R_CNT);
