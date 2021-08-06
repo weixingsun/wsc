@@ -15,6 +15,7 @@
 #include <prometheus/gauge.h>
 #include <prometheus/exposer.h>
 #include <prometheus/registry.h>
+#include <jemalloc/jemalloc.h>
 using websocketpp::lib::placeholders::_1;
 using websocketpp::lib::placeholders::_2;
 using websocketpp::lib::bind;
@@ -465,10 +466,10 @@ void print() {
 void prom_init(){
     prometheus::Exposer exposer{PORT};
     auto registry = std::make_shared<prometheus::Registry>();
-    auto& wsc_rate   = prometheus::BuildGauge().Name("wsc_client_rate")  .Help("").Labels({{"key","rate"}}).Register(*registry);
-    auto& wsc_latavg = prometheus::BuildGauge().Name("wsc_client_latavg").Help("").Labels({{"key","latavg"}}).Register(*registry);
-    auto& wsc_latmax = prometheus::BuildGauge().Name("wsc_client_latmax").Help("").Labels({{"key","latmax"}}).Register(*registry);
-    auto& wsc_reconn = prometheus::BuildGauge().Name("wsc_client_reconn").Help("").Labels({{"key","reconn"}}).Register(*registry);
+    auto& wsc_rate   = prometheus::BuildGauge().Name("wsc_client_rate")  .Help("").Labels({{"job","perf_qa_job"}}).Register(*registry);
+    auto& wsc_latavg = prometheus::BuildGauge().Name("wsc_client_latavg").Help("").Labels({{"job","perf_qa_job"}}).Register(*registry);
+    auto& wsc_latmax = prometheus::BuildGauge().Name("wsc_client_latmax").Help("").Labels({{"job","perf_qa_job"}}).Register(*registry);
+    auto& wsc_reconn = prometheus::BuildGauge().Name("wsc_client_reconn").Help("").Labels({{"job","perf_qa_job"}}).Register(*registry);
     //rate    = &wsc_perf.Add({{"type", "guage"}, {"name", "rate"  +METRIC_NAME}});  //{"host", IP},
     //reconn  = &wsc_perf.Add({{"type", "guage"}, {"name", "reconn"+METRIC_NAME}});
     //latavg  = &wsc_perf.Add({{"type", "guage"}, {"name", "latavg"+METRIC_NAME}});

@@ -806,7 +806,7 @@ protected:
         }
 
         std::string & out = m_current_msg->msg_ptr->get_raw_payload();
-        size_t offset = out.size();
+        //size_t offset = out.size();
 
         // decompress message if needed.
         if (m_permessage_deflate.is_enabled()
