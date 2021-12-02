@@ -172,21 +172,25 @@ void on_message_timed(websocketpp::connection_hdl hdl, message_ptr msg) {
 void on_open_tls(websocketpp::client<websocketpp::config::asio_tls_client> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
     spdlog::debug("TLS Connection: opened");
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(400));
     ssend_timed(c,hdl);
 }
 void on_open_no_tls(websocketpp::client<websocketpp::config::asio_client> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
     spdlog::debug("Non-TLS Connection: opened");
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(400));
     send_timed(c,hdl);
 }
 void on_open_no_tls_zip(websocketpp::client<deflate_config> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
     spdlog::debug("Zip Non-TLS Connection: opened");
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(400));
     zsend_timed(c,hdl);
 }
 void on_open_no_tls_zip15(websocketpp::client<deflate_config_15> *c, websocketpp::connection_hdl hdl) {
     //spdlog::info("connection open: hdl {} ", hdl.lock().get());
     spdlog::debug("Zip15 Non-TLS Connection: opened");
+    boost::this_thread::sleep_for(boost::chrono::milliseconds(400));
     z15_send_timed(c,hdl);
 }
 static context_ptr on_tls_init() {
